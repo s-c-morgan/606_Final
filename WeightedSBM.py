@@ -9,7 +9,12 @@ Created on Thu Apr  3 11:24:09 2025
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 import scipy.sparse as sp
+from rpca import *
+from op import *
+from sklearn.cluster import KMeans
+from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 class WeightedSBM:
     """
@@ -439,117 +444,165 @@ def generate_noisy_sbm(sbm, G, noise_type='element', noise_density=0.05, noise_m
     networkx.Graph
         A new graph with noise added to the weights
     """
+
+def generate_noisy_sbm(sbm, G, noise_type='element', noise_density=0.05, noise_magnitude=0.1, random_state=None):
+    """
+    Generate a noisy version of a stochastic blockmodel with extensive debugging.
+    """
+
+    
     # Get the adjacency matrix
+
     A, ordered_nodes = sbm.get_adjacency_matrix(G)
     n = A.shape[0]
+
     
-    # Set up random state properly
+    # Set up random state - SAFER VERSION
+
     if random_state is None:
-        rng = np.random.RandomState(None)
+
+        rng = np.random.RandomState()
     elif isinstance(random_state, np.random.RandomState):
+
         rng = random_state
     else:
+
+        # Always create a new RandomState to be safe
         try:
-            rng = np.random.RandomState(int(random_state))
+            seed = int(random_state)
+
+            rng = np.random.RandomState(seed)
         except:
-            # If conversion fails, create a new random state
-            print("Warning: Could not use provided random_state, using a new random state.")
-            rng = np.random.RandomState(None)
+
+            rng = np.random.RandomState(42)
     
     if noise_type == 'element':
-        # Use numpy directly instead of calling the helper function
-        # This avoids potential issues with the random state
-        nnz = int(noise_density * n * (n-1) / 2)
-        rows = []
-        cols = []
-        
-        # Generate random indices for the upper triangle
-        for _ in range(nnz):
-            while True:
+
+        try:
+            # Instead of using generate_symmetric_sparse_noise, let's implement it directly
+            # to eliminate potential sources of error
+            noise = np.zeros((n, n))
+            # Determine which elements to make non-zero (upper triangular to maintain symmetry)
+            num_elements = int((n * (n + 1) / 2) * noise_density)  # Including diagonal
+
+            
+            # Generate random indices
+            indices = []
+            for _ in range(num_elements):
                 i = rng.randint(0, n)
-                j = rng.randint(0, n)
-                if i > j:  # Ensure upper triangle
-                    i, j = j, i
-                if i != j and (i, j) not in zip(rows, cols):
-                    rows.append(i)
-                    cols.append(j)
-                    break
-        
-        # Generate random values
-        values = rng.uniform(-noise_magnitude, noise_magnitude, len(rows))
-        
-        # Create noise matrix
-        noise = np.zeros((n, n))
-        for i, j, val in zip(rows, cols, values):
-            noise[i, j] = val
-            noise[j, i] = val  # Make symmetric
+                j = rng.randint(i, n)  # Keep in upper triangle
+                indices.append((i, j))
+            
+            # Set random values at those indices
+            for i, j in indices:
+                val = rng.uniform(-noise_magnitude, noise_magnitude)
+                noise[i, j] = val
+                if i != j:  # Make sure we don't double-set the diagonal
+                    noise[j, i] = val  # Make symmetric
+            
+           
+        except Exception as e:
+ 
+            raise
             
     elif noise_type == 'column':
-        # Generate column-wise perturbation
-        noise = np.zeros((n, n))
-        # Determine which columns to perturb
-        num_cols_to_perturb = max(1, int(n * noise_density))
-        perturb_cols = rng.choice(n, size=num_cols_to_perturb, replace=False)
-        
-        for col in perturb_cols:
-            # Generate column perturbation
-            col_noise = rng.uniform(-noise_magnitude, noise_magnitude, size=n)
-            noise[:, col] += col_noise
-            noise[col, :] += col_noise  # Ensure symmetry
-            noise[col, col] -= col_noise[col]  # Avoid double-counting diagonal
+
+        try:
+            noise = np.zeros((n, n))
+            # Determine which columns to perturb
+            num_cols = int(n * noise_density)
+
+            if num_cols < 1:
+                num_cols = 1  # Ensure at least one column is perturbed
+                
+            perturb_cols = rng.choice(n, size=num_cols, replace=False)
+
+            
+            for col in perturb_cols:
+                # Generate column perturbation
+                col_noise = rng.uniform(-noise_magnitude, noise_magnitude, size=n)
+                noise[:, col] += col_noise
+                noise[col, :] += col_noise  # Ensure symmetry
+                noise[col, col] -= col_noise[col]  # Avoid double-counting diagonal
+            
+     
+        except Exception as e:
+   
+            raise
             
     elif noise_type == 'sparse':
-        # Generate sparse random noise with specific pattern
-        noise = np.zeros((n, n))
-        # Number of noise elements based on density
-        num_noise_elements = max(1, int(noise_density * n * n / 2))  # Divide by 2 for symmetry
-        
-        # Generate random positions for noise (upper triangular to ensure symmetry)
-        i_indices = []
-        j_indices = []
-        for _ in range(num_noise_elements):
-            attempts = 0
-            while attempts < 1000:  # Avoid infinite loops
-                i = rng.randint(0, n)
-                j = rng.randint(i, n)  # j >= i to stay in upper triangle
-                if (i, j) not in zip(i_indices, j_indices):
-                    i_indices.append(i)
-                    j_indices.append(j)
-                    break
-                attempts += 1
-            if attempts >= 1000:
-                break
-        
-        # Generate random noise values
-        values = rng.uniform(-noise_magnitude, noise_magnitude, size=len(i_indices))
-        
-        # Assign noise values
-        for i, j, val in zip(i_indices, j_indices, values):
-            noise[i, j] = val
-            if i != j:  # Don't double-count diagonal
-                noise[j, i] = val  # Make symmetric
+    
+        try:
+            noise = np.zeros((n, n))
+            # Number of noise elements based on density
+            num_noise_elements = int(noise_density * n * n / 2)  # Divide by 2 for symmetry
+
+            
+            # Generate random positions for noise (upper triangular to ensure symmetry)
+            i_indices = []
+            j_indices = []
+            for _ in range(num_noise_elements):
+                attempts = 0
+                while attempts < 100:  # Limit attempts to prevent infinite loop
+                    i = rng.randint(0, n)
+                    j = rng.randint(i, n)  # j >= i to stay in upper triangle
+                    if (i, j) not in zip(i_indices, j_indices):
+                        i_indices.append(i)
+                        j_indices.append(j)
+                        break
+                    attempts += 1
+            
+
+            
+            # Generate random noise values
+            values = rng.uniform(-noise_magnitude, noise_magnitude, size=len(i_indices))
+            
+            # Assign noise values
+            for i, j, val in zip(i_indices, j_indices, values):
+                noise[i, j] = val
+                if i != j:  # Don't double-count diagonal
+                    noise[j, i] = val  # Make symmetric
+            
+
+        except Exception as e:
+
+            raise
     else:
         raise ValueError(f"Invalid noise_type: {noise_type}. Must be 'element', 'column', or 'sparse'")
     
     # Add noise to the adjacency matrix
-    A_noisy = A + noise
-    
-    # Make sure the resulting matrix has valid values (no negative weights)
-    # Uncomment if you want to enforce this constraint
-    # A_noisy = np.maximum(0, A_noisy)
+
+    try:
+        # Directly add noise instead of using add_noise_to_blockmodel_matrix
+        A_noisy = A + noise
+
+    except Exception as e:
+ 
+        raise
     
     # Create a new graph from the noisy adjacency matrix
-    G_noisy = nx.from_numpy_array(A_noisy)
+
+    try:
+        G_noisy = nx.from_numpy_array(A_noisy)
+     
+    except Exception as e:
+
+        raise
     
     # Copy node attributes from the original graph to preserve community information
-    for i, node in enumerate(ordered_nodes):
-        community = G.nodes[node]['community']
-        order = G.nodes[node]['order']
-        G_noisy.nodes[i]['community'] = community
-        G_noisy.nodes[i]['order'] = order
+
+    try:
+        for i, node in enumerate(ordered_nodes):
+            community = G.nodes[node]['community']
+            order = G.nodes[node]['order']
+            G_noisy.nodes[i]['community'] = community
+            G_noisy.nodes[i]['order'] = order
+
+    except Exception as e:
+
+        raise
     
     return G_noisy
-
 def visualize_noise_effect(sbm, G, G_noisy):
     """
     Visualize the effect of noise on the adjacency matrix.
@@ -586,3 +639,22 @@ def visualize_noise_effect(sbm, G, G_noisy):
     
     plt.tight_layout()
     plt.show()
+def evaluate_clustering(pred_labels, true_labels):
+    # Calculate error rate (percentage of misclassified nodes)
+    # First, we need to handle the label matching issue (permutation invariance)
+    # For binary case, we can simply check if flipping labels improves accuracy
+    accuracy1 = np.mean(pred_labels == true_labels)
+    accuracy2 = np.mean(pred_labels == (1 - true_labels))
+    accuracy = max(accuracy1, accuracy2)
+    error_rate = 1 - accuracy
+    
+    # Calculate additional metrics
+    ari = adjusted_rand_score(true_labels, pred_labels)
+    nmi = normalized_mutual_info_score(true_labels, pred_labels)
+    
+    return {
+        "error_rate": error_rate,
+        "accuracy": accuracy,
+        "adjusted_rand_index": ari,
+        "normalized_mutual_info": nmi
+    }

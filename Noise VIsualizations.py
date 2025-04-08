@@ -13,22 +13,21 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 import scipy.sparse as sp
 from WeightedSBM import *
+from rpca import *
+from op import *
 
 
-# Assuming the WeightedSBM class and noise functions are already imported
-# from your module. If they're in a separate file, you would need to import them.
+np.random.seed(42)
 
-
-    # Set random seed for reproducibility
 # Create a weighted SBM
 n_nodes = 100
-n_communities = 4
-p_within = 0.5
-p_between = 0.1
+n_communities = 2
+p_within = 1
+p_between = 1
 
 # Custom weight distributions
-weight_within = lambda: np.random.normal(0.8, 0.1)  # Stronger within-community
-weight_between = lambda: np.random.normal(0.2, 0.1)  # Weaker between-community
+weight_within = lambda: np.random.normal(0.3, 0.1)  # Stronger within-community
+weight_between = lambda: np.random.normal(-0.2, 0.1)  # Weaker between-community
 
 # Initialize the SBM
 sbm = WeightedSBM(
@@ -50,20 +49,20 @@ for key, value in stats.items():
     print(f"  {key}: {value}")
 
 # Generate noisy versions with different noise types
-noise_types = ['element', 'column', 'sparse']
+noise_types = ['element', 'column']
 noise_graphs = {}
-
 for noise_type in noise_types:
-        # Create a proper numpy random state
-        rng = np.random.RandomState(42)
-        
+    # Create a proper numpy random state
+    rng = np.random.RandomState(42)  # Make sure this is a RandomState object
+    
+    try:
         G_noisy = generate_noisy_sbm(
             sbm=sbm,
             G=G,
             noise_type=noise_type,
-            noise_density=0.1,  # 10% noise density
-            noise_magnitude=0.2,  # Noise up to 0.2 in magnitude
-            random_state=rng  # Pass the proper random state object
+            noise_density=0.4,
+            noise_magnitude=0.3,
+            random_state=rng
         )
         noise_graphs[noise_type] = G_noisy
         
@@ -72,6 +71,8 @@ for noise_type in noise_types:
         print(f"\nNoisy Graph ({noise_type}) Statistics:")
         for key, value in stats_noisy.items():
             print(f"  {key}: {value}")
+    except Exception as e:
+        print(f"Error generating noisy graph with {noise_type} noise: {e}")
     
 # Visualize the original graph and its adjacency matrix
 plt.figure(figsize=(12, 10))
@@ -165,3 +166,6 @@ for bar in bars:
 
 plt.tight_layout()
 plt.show()
+
+rpca_o = RobustPCA()
+rpca_o.fit(A)
