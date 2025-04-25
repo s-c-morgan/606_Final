@@ -18,39 +18,26 @@ from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from scipy.linalg import eigh
 
 def get_top_eigenvectors(matrix, k):
-    """
-    Get the top k eigenvectors of a symmetric matrix.
-    For community detection, we use the eigenvectors corresponding to the k largest eigenvalues.
-    """
-    # Ensure the matrix is symmetric
     if not np.allclose(matrix, matrix.T):
         matrix = (matrix + matrix.T) / 2
-    
-    # Get eigenvalues and eigenvectors
     eigenvalues, eigenvectors = eigh(matrix)
-    
-    # Sort in descending order (largest eigenvalues first)
     idx = np.argsort(eigenvalues)[::-1]
-    eigenvalues = eigenvalues[idx]
-    eigenvectors = eigenvectors[:, idx]
-    
-    # Return the top k eigenvectors
-    return eigenvectors[:, :k]
+    return eigenvectors[:, idx[:k]]
 
+def spectral_unnormalized(adj_matrix, true_labels, seed):
+    eigenvectors = get_top_eigenvectors(adj_matrix, 2)
+    labels = KMeans(n_clusters=2, random_state=seed, n_init=10).fit_predict(eigenvectors)
+    return evaluate_clustering(labels, true_labels), labels
 
 np.random.seed(42)
-
-# Create a weighted SBM
 n_nodes = 100
 n_communities = 2
 p_within = 1
 p_between = 1
 
-# Custom weight distributions
-weight_within = lambda: np.random.normal(0.3, 0.1)  # Stronger within-community
-weight_between = lambda: np.random.normal(-0.2, 0.1)  # Weaker between-community
+weight_within = lambda: np.random.normal(0.5, 1)
+weight_between = lambda: np.random.normal(-0.5, 1)
 
-# Initialize the SBM
 sbm = WeightedSBM(
     n_nodes=n_nodes,
     n_communities=n_communities,
@@ -60,140 +47,99 @@ sbm = WeightedSBM(
     weight_dist_between=weight_between
 )
 
-# Generate the original graph
 G = sbm.generate_graph()
-
-# Print some statistics
 stats = sbm.calculate_statistics(G)
 print("Original Graph Statistics:")
 for key, value in stats.items():
     print(f"  {key}: {value}")
 
-
 noise_types = ['element', 'column']
 noise_graphs = {}
 for noise_type in noise_types:
-    # Create a proper numpy random state
-    rng = np.random.RandomState(42)  # Make sure this is a RandomState object
-    
+    rng = np.random.RandomState(42)
     try:
         G_noisy = generate_noisy_sbm(
             sbm=sbm,
             G=G,
             noise_type=noise_type,
-            noise_density=0.4,
-            noise_magnitude=0.3,
+            noise_density=0.5,
+            noise_magnitude=8,
             random_state=rng
         )
         noise_graphs[noise_type] = G_noisy
-        
-        # Print statistics for each noisy graph
         stats_noisy = sbm.calculate_statistics(G_noisy)
         print(f"\nNoisy Graph ({noise_type}) Statistics:")
         for key, value in stats_noisy.items():
             print(f"  {key}: {value}")
     except Exception as e:
         print(f"Error generating noisy graph with {noise_type} noise: {e}")
-    
-    
+
 true_labels = np.array(sbm.community_assignments)
 
-# Initialize dictionaries to store results
 rpca_models = {}
-op_models = {}  # For OutlierPursuit models
-spectral_results = {}  # For standard spectral clustering results
+op_models = {}
+spectral_results = {}
 rpca_results = {}
-op_results = {}  # For OutlierPursuit results
+op_results = {}
 rpca_metrics = {}
-op_metrics = {}  # For OutlierPursuit metrics
-spectral_metrics = {}  # For standard spectral clustering metrics
+op_metrics = {}
+spectral_metrics = {}
 
-# Process each graph (original and noisy versions)
 all_graphs = {"original": G}
 all_graphs.update(noise_graphs)
 
 for graph_name, graph in all_graphs.items():
     print(f"\nProcessing {graph_name} graph...")
-    # Get adjacency matrix
     adj_matrix = nx.to_numpy_array(graph)
-    
-    # Apply standard spectral clustering on the adjacency matrix
+
     print(f"  Applying standard spectral clustering...")
     try:
-        # Make sure the adjacency matrix is symmetric
         adj_matrix_sym = (adj_matrix + adj_matrix.T) / 2
-        
-        # Direct spectral clustering on adjacency matrix
-        spectral = SpectralClustering(
-            n_clusters=n_communities,
-            affinity='precomputed',
-            random_state=42,
-            assign_labels='kmeans'
-        )
-        spectral_cluster_labels = spectral.fit_predict(adj_matrix_sym)
+        metrics, spectral_cluster_labels = spectral_unnormalized(adj_matrix_sym, true_labels, seed=42)
         spectral_results[graph_name] = spectral_cluster_labels
-        
-        # Evaluate clustering performance
-        spectral_metrics[graph_name] = evaluate_clustering(spectral_cluster_labels, true_labels)
-        
+        spectral_metrics[graph_name] = metrics
+
         print(f"  Standard Spectral Clustering Results:")
         for metric_name, metric_value in spectral_metrics[graph_name].items():
             print(f"    {metric_name}: {metric_value:.4f}")
     except Exception as e:
         print(f"  Error in standard spectral clustering for {graph_name}: {e}")
-    
+
     print(f"  Applying Robust PCA...")
-    # Apply Robust PCA
     rpca_model = RobustPCA(max_iter=100, tol=1e-4)
     try:
         rpca_model.fit(adj_matrix)
         rpca_models[graph_name] = rpca_model
-        
-        # Get low-rank component
         low_rank = rpca_model.get_low_rank()
-        
-        # Get top k eigenvectors of the low-rank matrix
         eigenvectors = get_top_eigenvectors(low_rank, n_communities)
-        
-        # Apply K-means clustering on the eigenvectors
-        kmeans = KMeans(n_clusters=n_communities, random_state=42, n_init=10)
-        rpca_cluster_labels = kmeans.fit_predict(eigenvectors)
+        rpca_cluster_labels = KMeans(n_clusters=n_communities, random_state=42, n_init=10).fit_predict(eigenvectors)
         rpca_results[graph_name] = rpca_cluster_labels
-        
-        # Evaluate clustering performance
         metrics = evaluate_clustering(rpca_cluster_labels, true_labels)
         rpca_metrics[graph_name] = metrics
-        
+
         print(f"  RPCA Clustering Results:")
         for metric_name, metric_value in metrics.items():
             print(f"    {metric_name}: {metric_value:.4f}")
     except Exception as e:
         print(f"  Error in RPCA processing for {graph_name}: {e}")
-    
+
     print(f"  Applying OutlierPursuit...")
-    # Apply OutlierPursuit
     try:
         op_model = OutlierPursuit(gamma=0.15)
         low_rank_op = op_model.fit_transform(adj_matrix)
         op_models[graph_name] = op_model
-        
-        # Get top k eigenvectors of the low-rank matrix from OutlierPursuit
         eigenvectors_op = get_top_eigenvectors(low_rank_op, n_communities)
-        
-        # Apply K-means clustering on the eigenvectors
-        kmeans_op = KMeans(n_clusters=n_communities, random_state=42, n_init=10)
-        op_cluster_labels = kmeans_op.fit_predict(eigenvectors_op)
+        op_cluster_labels = KMeans(n_clusters=n_communities, random_state=42, n_init=10).fit_predict(eigenvectors_op)
         op_results[graph_name] = op_cluster_labels
-        
-        # Evaluate clustering performance
         metrics_op = evaluate_clustering(op_cluster_labels, true_labels)
         op_metrics[graph_name] = metrics_op
-        
+
         print(f"  OutlierPursuit Clustering Results:")
         for metric_name, metric_value in metrics_op.items():
             print(f"    {metric_name}: {metric_value:.4f}")
     except Exception as e:
         print(f"  Error in OutlierPursuit processing for {graph_name}: {e}")
+
 
 # Visualize comparative results
 plt.figure(figsize=(15, 10))

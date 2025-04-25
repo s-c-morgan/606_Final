@@ -60,8 +60,8 @@ for noise_type in noise_types:
             sbm=sbm,
             G=G,
             noise_type=noise_type,
-            noise_density=0.4,
-            noise_magnitude=0.3,
+            noise_density=1,
+            noise_magnitude=2,
             random_state=rng
         )
         noise_graphs[noise_type] = G_noisy
